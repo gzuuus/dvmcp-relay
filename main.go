@@ -70,18 +70,40 @@ func saveReplaceableEvent(ctx context.Context, e *nostr.Event) error {
 	return nil
 }
 
-func Query(ctx context.Context, c rely.Client, f nostr.Filters) ([]nostr.Event, error) {
-	log.Printf("[INFO] Received query with filters: %v", f)
+func Query(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.Event, error) {
+	log.Printf("[INFO] Received query with filters: %v", filters)
 	result := make([]nostr.Event, 0)
 
-	for _, f := range f {
-		events, err := buffer.QueryEvents(ctx, f)
+	for _, filter := range filters {
+		ephemeralEvents, err := buffer.QueryEvents(ctx, filter)
 		if err != nil {
 			log.Printf("[ERROR] querying ephemeral events: %v", err)
 		} else {
-			for _, event := range events {
+			for _, event := range ephemeralEvents {
 				if event != nil {
 					result = append(result, *event)
+				}
+			}
+		}
+
+		lmdbEvents, err := db.QueryEvents(ctx, filter)
+		if err != nil {
+			log.Printf("[ERROR] querying LMDB events: %v", err)
+		} else {
+			for {
+				select {
+				case event, ok := <-lmdbEvents:
+					if !ok {
+						lmdbEvents = nil
+						break
+					}
+					result = append(result, *event)
+				case <-ctx.Done():
+					log.Printf("[INFO] context cancelled while querying LMDB")
+					return result, nil
+				}
+				if lmdbEvents == nil {
+					break
 				}
 			}
 		}
